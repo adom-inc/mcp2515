@@ -2,10 +2,11 @@
 #![no_main]
 
 use defmt_rtt as _;
+use embedded_hal::spi::SpiBus;
 use panic_probe as _;
 use rp_pico as bsp;
 
-use embedded_hal::can::{ExtendedId, Frame, Id};
+use embedded_can::{ExtendedId, Frame, Id};
 use mcp2515::{error::Error, frame::CanFrame, regs::OpMode, CanSpeed, McpSpeed, Settings, MCP2515};
 
 use defmt::{panic, *};
@@ -19,7 +20,7 @@ use bsp::{
         pac,
         sio::Sio,
         watchdog::Watchdog,
-        Spi,
+        Spi, Timer,
     },
 };
 
@@ -47,6 +48,7 @@ fn main() -> ! {
     .unwrap();
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
 
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
@@ -55,25 +57,26 @@ fn main() -> ! {
         &mut pac.RESETS,
     );
 
-    let _spi_sclk = pins.gpio2.into_mode::<FunctionSpi>();
-    let _spi_mosi = pins.gpio3.into_mode::<FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_mode::<FunctionSpi>();
+    let spi_sclk = pins.gpio2.into_function::<FunctionSpi>();
+    let spi_mosi = pins.gpio3.into_function::<FunctionSpi>();
+    let spi_miso = pins.gpio4.into_function::<FunctionSpi>();
+
     let spi_cs = pins.gpio5.into_push_pull_output();
 
-    let spi = Spi::<_, _, 8>::new(pac.SPI0).init(
+    let spi = Spi::<_, _, _, 8>::new(pac.SPI0, (spi_mosi, spi_miso, spi_sclk)).init(
         &mut pac.RESETS,
         clocks.peripheral_clock.freq(),
         200_000.Hz(),
-        &embedded_hal::spi::MODE_0,
+        embedded_hal::spi::MODE_0,
     );
 
     let mut can = MCP2515::new(spi, spi_cs);
     can.init(
-        &mut delay,
+        &mut timer,
         Settings {
             mode: OpMode::Loopback,       // Loopback for testing and example
             can_speed: CanSpeed::Kbps100, // Many options supported.
-            mcp_speed: McpSpeed::MHz8,    // Currently 16MHz and 8MHz chips are supported.
+            mcp_speed: McpSpeed::MHz16,   // Currently 16MHz and 8MHz chips are supported.
             clkout_en: false,
         },
     )

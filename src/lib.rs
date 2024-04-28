@@ -11,11 +11,11 @@ pub mod stat;
 use core::fmt::Debug;
 
 use buffer::{RxBuf, RxBufIdent, TxBuf};
-use embedded_hal::{
-    blocking::{can::Can, delay::DelayMs, spi::Transfer},
-    can::{ExtendedId, Frame, Id, StandardId},
-    digital::v2::OutputPin,
-};
+use embedded_can::blocking::Can;
+use embedded_can::{ExtendedId, Frame, Id, StandardId};
+use embedded_hal::delay::DelayNs;
+use embedded_hal::digital::OutputPin;
+use embedded_hal::spi::SpiBus;
 use filter::{RxFilter, RxMask};
 use frame::CanFrame;
 use regs::{OpMode, Register};
@@ -120,7 +120,7 @@ pub struct MCP2515<SPI, CS> {
 
 impl<SPI, CS, SPIE, CSE> MCP2515<SPI, CS>
 where
-    SPI: Transfer<u8, Error = SPIE>,
+    SPI: SpiBus<u8, Error = SPIE>,
     CS: OutputPin<Error = CSE>,
     SPIE: Debug,
     CSE: Debug,
@@ -154,11 +154,7 @@ where
     ///
     /// * `delay` - Delay interface from downstream HAL.
     /// * `settings` - Settings for MCP2515. See [`Settings`].
-    pub fn init(
-        &mut self,
-        delay: &mut impl DelayMs<u8>,
-        settings: Settings,
-    ) -> Result<(), SPIE, CSE> {
+    pub fn init(&mut self, delay: &mut impl DelayNs, settings: Settings) -> Result<(), SPIE, CSE> {
         self.cs.set_high().map_err(Error::Hal)?;
         self.reset(delay)?;
 
@@ -496,7 +492,7 @@ where
     }
 
     /// Resets the MCP2515.
-    pub fn reset(&mut self, delay: &mut impl DelayMs<u8>) -> Result<(), SPIE, CSE> {
+    pub fn reset(&mut self, delay: &mut impl DelayNs) -> Result<(), SPIE, CSE> {
         self.transfer(&mut [Instruction::Reset as u8])?;
         // Sleep for 5ms after reset - if the device is in sleep mode it won't respond
         // immediately
@@ -558,11 +554,11 @@ where
     fn read_register_seq(&mut self, reg: Register, ret: &mut [u8]) -> Result<(), SPIE, CSE> {
         let mut hdr = [Instruction::Read as u8, reg as u8];
         self.with_cs(|spi| -> Result<_, _, _> {
-            spi.transfer(&mut hdr).map_err(Error::Spi)?;
+            spi.transfer_in_place(&mut hdr).map_err(Error::Spi)?;
             // As the MCP2515 doesn't care what we send it while reading, we can just
             // transfer `ret` as it is. The values will be overriden with received data as
             // we transfer the bytes.
-            spi.transfer(ret).map_err(Error::Spi)?;
+            spi.transfer_in_place(ret).map_err(Error::Spi)?;
             Ok(())
         })?
     }
@@ -600,10 +596,10 @@ where
     fn write_registers(&mut self, reg: Register, data: &[u8]) -> Result<(), SPIE, CSE> {
         let mut hdr = [Instruction::Write as u8, reg as u8];
         self.with_cs(|spi| -> Result<_, _, _> {
-            spi.transfer(&mut hdr).map_err(Error::Spi)?;
+            spi.transfer_in_place(&mut hdr).map_err(Error::Spi)?;
             for d in data {
                 let mut data = [*d];
-                spi.transfer(&mut data).map_err(Error::Spi)?;
+                spi.transfer_in_place(&mut data).map_err(Error::Spi)?;
             }
             Ok(())
         })?
@@ -673,7 +669,7 @@ where
     /// Returns the last element received from the slave. If no bytes were sent,
     /// 0 is returned.
     fn transfer(&mut self, bytes: &mut [u8]) -> Result<u8, SPIE, CSE> {
-        self.with_cs(|spi| spi.transfer(bytes))?
+        self.with_cs(|spi| spi.transfer_in_place(bytes))?
             .map_err(Error::Spi)?;
         if let [.., data] = bytes {
             Ok(*data)
@@ -694,7 +690,7 @@ where
 
 impl<SPI, CS, SPIE, CSE> Can for MCP2515<SPI, CS>
 where
-    SPI: Transfer<u8, Error = SPIE>,
+    SPI: SpiBus<u8, Error = SPIE>,
     CS: OutputPin<Error = CSE>,
     SPIE: Debug,
     CSE: Debug,
